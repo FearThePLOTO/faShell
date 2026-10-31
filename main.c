@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/wait.h>
+#include <linux/limits.h>
 
 #define MAX_LINE 100
 
@@ -13,7 +14,11 @@ int main(){
     int run_flag = 1;
 
     while(run_flag){
-        printf("FaShell > ");
+        char buf[PATH_MAX];
+        if(getcwd(buf, sizeof(buf)))
+            printf("FaShell ✦ %s > ", buf);
+        else
+            printf("FaShell ✦ > ");
         fflush(stdout);
         if(fgets(input, sizeof(input), stdin) == NULL){
             break;
@@ -35,7 +40,11 @@ int main(){
             run_flag = 0;
             continue;
         }
-
+        if(strcmp(args[0], "cd") == 0){
+            if(chdir(args[1] ? args[1] : getenv("HOME")) == -1)
+                perror("cd failed");
+            continue;
+        }
         pid_t pid = fork();
         if(pid == 0){
             if (execvp(args[0], args) == -1){
@@ -47,6 +56,7 @@ int main(){
         } else {
             perror("forking failed");
         }
+        
     }
 
 
