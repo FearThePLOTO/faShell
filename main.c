@@ -30,6 +30,7 @@ int main(){
     int run_flag = 1;
 
     while(run_flag){
+        while(waitpid(-1, NULL, WNOHANG) > 0);
         print_prompt();
         fflush(stdout);
         if(fgets(input, sizeof(input), stdin) == NULL){
@@ -57,6 +58,12 @@ int main(){
                 perror("cd failed");
             continue;
         }
+
+        int waitingFlag = 0;
+        if(strcmp(args[cnt-1], "&") == 0){
+            waitingFlag = 1;
+            args[cnt-1] = NULL;
+        }
         pid_t pid = fork();
         if(pid == 0){
             signal(SIGINT, SIG_DFL);
@@ -65,7 +72,8 @@ int main(){
                 exit(1);
             }
         } else if(pid > 0) {
-            wait(NULL);
+            if(!waitingFlag)
+                wait(NULL);
         } else {
             perror("forking failed");
         }
