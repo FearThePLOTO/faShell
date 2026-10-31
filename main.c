@@ -3,17 +3,34 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/wait.h>
+#include <linux/limits.h>
+#include <signal.h>
 
 #define MAX_LINE 100
 
-int main(){
+static void print_prompt(void){
+    char buf[PATH_MAX];
+    if(getcwd(buf, sizeof(buf)))
+        printf("FaShell ✦ %s > ", buf);
+    else
+        printf("FaShell ✦ > ");
+}
 
+static void on_sigint(int sig){
+    (void)sig;
+    printf("\n");
+    print_prompt();
+    fflush(stdout);
+}
+
+int main(){
+    signal(SIGINT, on_sigint);
     char *args[MAX_LINE/2 + 1];
     char input[MAX_LINE];
     int run_flag = 1;
 
     while(run_flag){
-        printf("FaShell > ");
+        print_prompt();
         fflush(stdout);
         if(fgets(input, sizeof(input), stdin) == NULL){
             break;
@@ -35,9 +52,14 @@ int main(){
             run_flag = 0;
             continue;
         }
-
+        if(strcmp(args[0], "cd") == 0){
+            if(chdir(args[1] ? args[1] : getenv("HOME")) == -1)
+                perror("cd failed");
+            continue;
+        }
         pid_t pid = fork();
         if(pid == 0){
+            signal(SIGINT, SIG_DFL);
             if (execvp(args[0], args) == -1){
                 perror("Command execution failed");
                 exit(1);
@@ -47,6 +69,7 @@ int main(){
         } else {
             perror("forking failed");
         }
+        
     }
 
 
