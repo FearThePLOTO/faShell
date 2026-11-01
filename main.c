@@ -32,7 +32,7 @@ int main(){
     int run_flag = 1;
 
     while(run_flag){
-        while(waitpid(-1, NULL, WNOHANG) > 0);   /* reap finished background jobs */
+        while(waitpid(-1, NULL, WNOHANG) > 0);   /* reap background children before they turn to zombies */
 
         if(sigsetjmp(g_ctrlc_env, 1) != 0){
             /* Ctrl+C landed: fall through to a fresh prompt */
@@ -53,12 +53,28 @@ int main(){
             break;
         }
 
+        /* !! re-runs the last command; must run before add_history so the
+           expanded command is stored, not the literal "!!" */
+        if(strcmp(line, "!!") == 0){
+            HIST_ENTRY **h = history_list();
+            if(h == NULL || history_length == 0){
+                printf("No commands in history.\n");
+                free(line);
+                continue;
+            }
+            printf("%s\n", h[history_length-1]->line);
+            char *expanded = strdup(h[history_length-1]->line);
+            free(line);
+            line = expanded;
+        }
+
         /* save the full line before strtok overwrites its spaces with NULs */
         if(line[strspn(line, " ")])
             add_history(line);
 
         int cnt = 0;
         char *token = strtok(line, " ");
+        /* readline lines are unbounded; args is not */
         while(token != NULL && cnt < MAX_LINE/2){
             args[cnt++] = token;
             token = strtok(NULL, " ");
@@ -78,6 +94,13 @@ int main(){
         if(strcmp(args[0], "cd") == 0){
             if(chdir(args[1] ? args[1] : getenv("HOME")) == -1)
                 perror("cd failed");
+            free(line);
+            continue;
+        }
+        if(strcmp(args[0], "history") == 0){
+            HIST_ENTRY **h = history_list();
+            for(int i = 0; h && h[i]; i++)
+                printf("%5d  %s\n", i + 1, h[i]->line);
             free(line);
             continue;
         }
