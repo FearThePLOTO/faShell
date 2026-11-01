@@ -5,57 +5,75 @@
 #include <sys/wait.h>
 #include <linux/limits.h>
 #include <signal.h>
+#include <readline/readline.h>
+#include <setjmp.h>
 
 #define MAX_LINE 100
 
-static void print_prompt(void){
-    char buf[PATH_MAX];
-    if(getcwd(buf, sizeof(buf)))
-        printf("FaShell ✦ %s > ", buf);
-    else
-        printf("FaShell ✦ > ");
-}
+/* Ctrl+C: abandon the input line like bash (GNU readline FAQ pattern) */
+static sigjmp_buf g_ctrlc_env;
+static volatile sig_atomic_t g_jump_active = 0;
 
 static void on_sigint(int sig){
     (void)sig;
-    printf("\n");
-    print_prompt();
-    fflush(stdout);
+    if(!g_jump_active) return;      /* interrupt only while inside readline() */
+    g_jump_active = 0;
+    write(STDOUT_FILENO, "\n", 1);
+    rl_free_line_state();
+    rl_cleanup_after_signal();
+    siglongjmp(g_ctrlc_env, 1);
 }
 
 int main(){
     signal(SIGINT, on_sigint);
+    rl_catch_signals = 0;           /* we own signal handling */
     char *args[MAX_LINE/2 + 1];
-    char input[MAX_LINE];
     int run_flag = 1;
 
     while(run_flag){
-        while(waitpid(-1, NULL, WNOHANG) > 0);
-        print_prompt();
-        fflush(stdout);
-        if(fgets(input, sizeof(input), stdin) == NULL){
+        while(waitpid(-1, NULL, WNOHANG) > 0);   /* reap finished background jobs */
+
+        if(sigsetjmp(g_ctrlc_env, 1) != 0){
+            /* Ctrl+C landed: fall through to a fresh prompt */
+        }
+        g_jump_active = 1;
+
+        char cwd[PATH_MAX];
+        char prompt[PATH_MAX + 32];
+        if(getcwd(cwd, sizeof(cwd)))
+            snprintf(prompt, sizeof(prompt), "FaShell ✦ %s > ", cwd);
+        else
+            snprintf(prompt, sizeof(prompt), "FaShell ✦ > ");
+
+        char *line = readline(prompt);
+        g_jump_active = 0;
+        if(line == NULL){
+            putchar('\n');      /* Ctrl+D/EOF */
             break;
         }
 
-        input[strcspn(input, "\n")] = '\0';
-
         int cnt = 0;
-        char *token = strtok(input, " ");
-        while(token != NULL){
+        char *token = strtok(line, " ");
+        while(token != NULL && cnt < MAX_LINE/2){
             args[cnt++] = token;
             token = strtok(NULL, " ");
         }
         args[cnt] = NULL;
 
-        if(args[0] == NULL) continue;
+        if(args[0] == NULL){
+            free(line);
+            continue;
+        }
 
         if(strcmp(args[0], "exit") == 0){
+            free(line);
             run_flag = 0;
             continue;
         }
         if(strcmp(args[0], "cd") == 0){
             if(chdir(args[1] ? args[1] : getenv("HOME")) == -1)
                 perror("cd failed");
+            free(line);
             continue;
         }
 
@@ -77,7 +95,7 @@ int main(){
         } else {
             perror("forking failed");
         }
-        
+        free(line);
     }
 
 
