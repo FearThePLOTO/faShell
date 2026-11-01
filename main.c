@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/wait.h>
+#include <fcntl.h>
 #include <linux/limits.h>
 #include <signal.h>
 #include <readline/readline.h>
@@ -110,9 +111,49 @@ int main(){
             waitingFlag = 1;
             args[cnt-1] = NULL;
         }
+
+        /* redirection: cut the operator and filename out of argv here (so the
+           child never sees them), rewire the fd in the child, spec says
+           one operator per command, never both */
+        int rd = 0;                 /* 0 none, 1 = '>', 2 = '<' */
+        char *rd_file = NULL;
+        for(int i = 0; args[i]; i++){
+            if(strcmp(args[i], ">") == 0 || strcmp(args[i], "<") == 0){
+                rd = (args[i][0] == '>') ? 1 : 2;
+                rd_file = args[i+1];
+                args[i] = NULL;
+                break;
+            }
+        }
+        if(rd && args[0] == NULL){
+            fprintf(stderr, "FaShell: missing command before '%s'\n",
+                    rd == 1 ? ">" : "<");
+            free(line);
+            continue;
+        }
+
         pid_t pid = fork();
         if(pid == 0){
             signal(SIGINT, SIG_DFL);
+            if(rd){
+                if(rd_file == NULL){
+                    fprintf(stderr, "FaShell: missing file after '%s'\n",
+                            rd == 1 ? ">" : "<");
+                    exit(1);
+                }
+                int fd = (rd == 1)
+                    ? open(rd_file, O_WRONLY|O_CREAT|O_TRUNC, 0644)
+                    : open(rd_file, O_RDONLY);
+                if(fd < 0){
+                    perror("open failed");
+                    exit(1);
+                }
+                if(dup2(fd, (rd == 1) ? STDOUT_FILENO : STDIN_FILENO) < 0){
+                    perror("dup2 failed");
+                    exit(1);
+                }
+                close(fd);
+            }
             if (execvp(args[0], args) == -1){
                 perror("Command execution failed");
                 exit(1);
