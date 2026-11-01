@@ -1,16 +1,4 @@
-#include <stdio.h>
-#include <unistd.h>
-#include <stdlib.h>
-#include <string.h>
-#include <sys/wait.h>
-#include <fcntl.h>
-#include <linux/limits.h>
-#include <signal.h>
-#include <readline/readline.h>
-#include <readline/history.h>
-#include <setjmp.h>
-
-#define MAX_LINE 100
+#include "shell.h"
 
 /* Ctrl+C: abandon the input line like bash (GNU readline FAQ pattern) */
 static sigjmp_buf g_ctrlc_env;
@@ -26,7 +14,22 @@ static void on_sigint(int sig){
     siglongjmp(g_ctrlc_env, 1);
 }
 
+/* boot splash */
+static void show_banner(void){
+    printf(FS_ACCENT
+"\n ███████╗ █████╗ ███████╗██╗  ██╗███████╗██╗      ██╗\n"
+" ██╔════╝██╔══██╗██╔════╝██║  ██║██╔════╝██║      ██║\n"
+" █████╗  ███████║███████╗███████║█████╗  ██║      ██║\n"
+" ██╔══╝  ██╔══██║╚════██║██╔══██║██╔══╝  ██║      ██║\n"
+" ██║     ██║  ██║███████║██║  ██║███████╗███████╗ ███████╗\n"
+" ╚═╝     ╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝╚══════╝╚══════╝ ╚══════╝\n"
+"                        (╥﹏╥)\n\n"
+           FS_RESET);
+}
+
 int main(){
+    if(isatty(STDIN_FILENO))
+        show_banner();          /* splash only on a real terminal: piped tests stay clean */
     signal(SIGINT, on_sigint);
     rl_catch_signals = 0;           /* we own signal handling */
     char *args[MAX_LINE/2 + 1];
@@ -41,11 +44,18 @@ int main(){
         g_jump_active = 1;
 
         char cwd[PATH_MAX];
-        char prompt[PATH_MAX + 32];
-        if(getcwd(cwd, sizeof(cwd)))
-            snprintf(prompt, sizeof(prompt), "FaShell ✦ %s > ", cwd);
-        else
-            snprintf(prompt, sizeof(prompt), "FaShell ✦ > ");
+        char prompt[PATH_MAX + 96];
+        if(getcwd(cwd, sizeof(cwd))){
+            /* $HOME collapses to ~ like a polite shell */
+            const char *h = getenv("HOME");
+            size_t hl = h ? strlen(h) : 0;
+            if(hl && strncmp(cwd, h, hl) == 0)
+                snprintf(prompt, sizeof(prompt), FS_C(FS_ACCENT)"✦ "FS_C(FS_FG)"~%s"FS_C(FS_MUTED)" > "FS_C(FS_RESET), cwd + hl);
+            else
+                snprintf(prompt, sizeof(prompt), FS_C(FS_ACCENT)"✦ "FS_C(FS_FG)"%s"FS_C(FS_MUTED)" > "FS_C(FS_RESET), cwd);
+        } else {
+            snprintf(prompt, sizeof(prompt), FS_C(FS_ACCENT)"✦ "FS_C(FS_MUTED)"> "FS_C(FS_RESET));
+        }
 
         char *line = readline(prompt);
         g_jump_active = 0;
