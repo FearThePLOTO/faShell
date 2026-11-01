@@ -6,6 +6,7 @@
 #include <linux/limits.h>
 #include <signal.h>
 #include <readline/readline.h>
+#include <readline/history.h>
 #include <setjmp.h>
 
 #define MAX_LINE 100
@@ -51,6 +52,10 @@ int main(){
             putchar('\n');      /* Ctrl+D/EOF */
             break;
         }
+
+        /* save the full line before strtok overwrites its spaces with NULs */
+        if(line[strspn(line, " ")])
+            add_history(line);
 
         int cnt = 0;
         char *token = strtok(line, " ");
