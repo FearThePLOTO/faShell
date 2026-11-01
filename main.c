@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/wait.h>
+#include <fcntl.h>
 #include <linux/limits.h>
 #include <signal.h>
 #include <readline/readline.h>
@@ -110,9 +111,127 @@ int main(){
             waitingFlag = 1;
             args[cnt-1] = NULL;
         }
+
+        /* pipeline: split '|' stages. spec caps graded tests at one pipe and
+           forbids mixing with redirection; the general loop is the same fd
+           dance repeated per stage, so we get N for the C price of ~2 */
+        int has_pipe = 0, has_rd = 0;
+        for(int i = 0; args[i]; i++){
+            if(!strcmp(args[i], "|")) has_pipe = 1;
+            else if(!strcmp(args[i], ">") || !strcmp(args[i], "<")) has_rd = 1;
+        }
+        if(has_pipe && has_rd){
+            fprintf(stderr, "FaShell: redirection cannot be combined with a pipe\n");
+            free(line);
+            continue;
+        }
+
+        if(has_pipe){
+            int nseg = 1;
+            for(int i = 0; args[i]; i++)
+                if(!strcmp(args[i], "|")) nseg++;
+
+            char **seg = args;          /* current stage's argv */
+            int prev_read = -1;         /* read end of the previous stage's pipe */
+            int failed = 0;
+            int npids = 0;
+
+            for(int stage = 0; stage < nseg; stage++){
+                char **next = seg;
+                while(*next && strcmp(*next, "|")) next++;
+
+                if(seg == next || *seg == NULL){    /* empty stage: |a, a|, a||b */
+                    fprintf(stderr, "FaShell: empty command in pipeline\n");
+                    failed = 1;
+                    break;
+                }
+                int last = (*next == NULL);
+                int fds[2] = {-1, -1};
+                if(!last && pipe(fds) == -1){
+                    perror("pipe failed");
+                    failed = 1;
+                    break;
+                }
+                pid_t pid = fork();
+                if(pid < 0){
+                    perror("forking failed");
+                    if(!last){ close(fds[0]); close(fds[1]); }
+                    failed = 1;
+                    break;
+                }
+                if(pid == 0){
+                    signal(SIGINT, SIG_DFL);
+                    if(prev_read != -1){
+                        dup2(prev_read, STDIN_FILENO);
+                        close(prev_read);
+                    }
+                    if(!last){
+                        dup2(fds[1], STDOUT_FILENO);
+                        close(fds[0]); close(fds[1]);
+                    }
+                    *next = NULL;               /* end this stage's argv */
+                    execvp(seg[0], seg);
+                    perror("Command execution failed");
+                    exit(1);
+                }
+                npids++;                if(prev_read != -1) close(prev_read);   /* consumed by this stage */
+                if(!last){
+                    close(fds[1]);              /* write end lives in the child now */
+                    prev_read = fds[0];         /* carry the read end forward */
+                } else break;
+                seg = next + 1;
+            }
+            if(failed && prev_read != -1)
+                close(prev_read);               /* stalled writers die on SIGPIPE */
+            if(!failed && !waitingFlag)
+                for(int k = 0; k < npids; k++)
+                    wait(NULL);
+            free(line);
+            continue;
+        }
+
+        /* redirection: cut the operator and filename out of argv here (so the
+           child never sees them), rewire the fd in the child, spec says
+           one operator per command, never both */
+        int rd = 0;                 /* 0 none, 1 = '>', 2 = '<' */
+        char *rd_file = NULL;
+        for(int i = 0; args[i]; i++){
+            if(strcmp(args[i], ">") == 0 || strcmp(args[i], "<") == 0){
+                rd = (args[i][0] == '>') ? 1 : 2;
+                rd_file = args[i+1];
+                args[i] = NULL;
+                break;
+            }
+        }
+        if(rd && args[0] == NULL){
+            fprintf(stderr, "FaShell: missing command before '%s'\n",
+                    rd == 1 ? ">" : "<");
+            free(line);
+            continue;
+        }
+
         pid_t pid = fork();
         if(pid == 0){
             signal(SIGINT, SIG_DFL);
+            if(rd){
+                if(rd_file == NULL){
+                    fprintf(stderr, "FaShell: missing file after '%s'\n",
+                            rd == 1 ? ">" : "<");
+                    exit(1);
+                }
+                int fd = (rd == 1)
+                    ? open(rd_file, O_WRONLY|O_CREAT|O_TRUNC, 0644)
+                    : open(rd_file, O_RDONLY);
+                if(fd < 0){
+                    perror("open failed");
+                    exit(1);
+                }
+                if(dup2(fd, (rd == 1) ? STDOUT_FILENO : STDIN_FILENO) < 0){
+                    perror("dup2 failed");
+                    exit(1);
+                }
+                close(fd);
+            }
             if (execvp(args[0], args) == -1){
                 perror("Command execution failed");
                 exit(1);
